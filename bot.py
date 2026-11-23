@@ -30,6 +30,7 @@ from db import Database
 from health import start_health_server
 from downloader import (
     DownloadError,
+    normalize_url,
     VideoDownloader,
     VideoTooLargeError,
     VideoTooLongError,
@@ -144,7 +145,8 @@ async def _watch_charge(charge_id: str, context: ContextTypes.DEFAULT_TYPE) -> N
 # --------------------------------------------------------------------- downlaod
 async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (update.effective_message.text or "").strip()
-    if not is_valid_url(text):
+    url = normalize_url(text)
+    if url is None:
         await _safe_reply(update, "Isso não parece um link válido. Envie uma URL de vídeo pública.")
         return
 
@@ -170,7 +172,7 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     # 1) metadados primeiro — bloqueio sem gasto de token
     try:
-        info = await asyncio.to_thread(downloader.extract_info, text)
+        info = await asyncio.to_thread(downloader.extract_info, url)
     except VideoTooLongError as exc:
         await _safe_reply(update, str(exc))
         return
@@ -185,7 +187,7 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     with tempfile.TemporaryDirectory(prefix="telegram_bot_") as tmp:
         try:
             result = await asyncio.to_thread(
-                downloader.download, text, Path(tmp)
+                downloader.download, url, Path(tmp)
             )
         except (DownloadError, VideoTooLargeError) as exc:
             await _safe_reply(update, str(exc))

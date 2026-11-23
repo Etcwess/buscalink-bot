@@ -10,6 +10,7 @@ Fluxo:
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,10 +38,46 @@ class DownloadError(Exception):
     """Falha ao extrair metadados ou baixar o vídeo."""
 
 
+def normalize_url(text: str) -> str | None:
+    """Extrai e normaliza uma URL de um texto qualquer.
+
+    Aceita:
+    - https://youtube.com/watch?v=...
+    - youtube.com/watch?v=...   (sem scheme)
+    - www.youtube.com/watch?v=...
+    - texto com a URL no meio: "olha esse: https://youtu.be/abc"
+    Retorna a URL com https:// ou None se não encontrar nada válido.
+    """
+    text = text.strip()
+    # Se já é uma URL completa, pega só ela
+    match = re.search(r"https?://[^\s<>\"']+", text)
+    if match:
+        candidate = match.group(0)
+    else:
+        # Procura um domínio conhecido mesmo sem scheme
+        match = re.search(
+            r"(?:www\.)?(?:youtube\.com|youtu\.be|youtube-nocookie\.com|"
+            r"tiktok\.com|vm\.tiktok\.com|instagram\.com|twitter\.com|"
+            r"x\.com|facebook\.com|fb\.watch|vimeo\.com|twitch\.tv|"
+            r"reddit\.com|redd\.it|mediafire\.com|drive\.google\.com)/[^\s<>\"']*",
+            text,
+            re.IGNORECASE,
+        )
+        if not match:
+            return None
+        candidate = "https://" + match.group(0)
+
+    parsed = urlparse(candidate)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    if "." not in parsed.netloc:
+        return None
+    return candidate
+
+
 def is_valid_url(url: str) -> bool:
     """Valida se a string parece uma URL http(s) com domínio."""
-    parsed = urlparse(url)
-    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+    return normalize_url(url) is not None
 
 
 @dataclass(frozen=True, slots=True)
