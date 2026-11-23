@@ -5,13 +5,14 @@ databases:
     plan: free
 
 services:
-  - type: worker
+  - type: web
     name: buscalink-bot
     runtime: python
     region: oregon
     plan: free
     buildCommand: "bash build.sh"
     startCommand: "python bot.py"
+    healthCheckPath: /
     envVars:
       - key: BOT_TOKEN
         sync: false

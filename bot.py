@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import tempfile
 from pathlib import Path
 
@@ -26,6 +27,7 @@ from telegram.ext import (
 
 from config import settings
 from db import Database
+from health import start_health_server
 from downloader import (
     DownloadError,
     VideoDownloader,
@@ -240,6 +242,13 @@ def main() -> None:
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_link)
     )
     application.add_error_handler(error_handler)
+
+    # Em Web Services (Render Free), PORT é definido pelo provedor.
+    # Subimos um health server para manter o processo classificado como web.
+    port = os.getenv("PORT")
+    if port:
+        start_health_server(port=int(port))
+        logger.info("Health server na porta %s", port)
 
     logger.info("Bot iniciado. DB=%s Pix=%s", settings.db_path, pix.name)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
