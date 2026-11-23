@@ -12,6 +12,7 @@ import asyncio
 import logging
 import os
 import tempfile
+import time
 from pathlib import Path
 
 from telegram import Update
@@ -202,14 +203,35 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if update.effective_message is not None:
         await update.effective_chat.send_action(ChatAction.UPLOAD_VIDEO)
 
+    # Heartbeat: atualiza o status a cada 20s para o usuário saber que ainda
+    # está trabalhando (downloads em hospedagem free podem ser lentos).
+    async def _heartbeat(msg, started: float) -> None:
+        while True:
+            await asyncio.sleep(20)
+            elapsed = int(time.time() - started)
+            try:
+                await msg.edit_text(f"⬇️ Ainda baixando... ({elapsed}s)")
+            except Exception:
+                return
+
+    started = time.time()
+    hb = None
+    if status_msg is not None:
+        hb = asyncio.create_task(_heartbeat(status_msg, started))
+
     with tempfile.TemporaryDirectory(prefix="telegram_bot_") as tmp:
         try:
             result = await asyncio.to_thread(
                 downloader.download, url, Path(tmp), info.format_id
             )
         except (DownloadError, VideoTooLargeError) as exc:
+            if hb:
+                hb.cancel()
             await _safe_reply(update, str(exc), status_msg)
             return
+
+        if hb:
+            hb.cancel()
 
         # 3) envia e só então debita o token
         try:

@@ -20,8 +20,10 @@ import yt_dlp
 from config import Settings
 
 # Bot API do Telegram: limite de 50 MB para envio via bot.
-# Usamos 45 MB de folga para evitar 413 "Request Entity Too Large".
+# Alvo menor para downloads rápidos em hospedagens com banda limitada.
 MAX_UPLOAD_BYTES = 45 * 1024 * 1024
+# Alvo preferido: ~18 MB. Reduz tempo de download e envio no Telegram.
+TARGET_UPLOAD_BYTES = 18 * 1024 * 1024
 
 
 class VideoTooLargeError(Exception):
@@ -119,13 +121,18 @@ def _pick_best_format(info: dict, duration: int, max_height: int) -> str | None:
             continue
         if est > MAX_UPLOAD_BYTES:
             continue
-        # Prefere maior resolução entre os que cabem.
         candidates.append((height or 0, est, str(f.get("format_id"))))
 
     if not candidates:
         return None
-    candidates.sort(reverse=True)
-    return candidates[0][2]
+
+    # Prefere o maior formato que caiba no ALVO (rápido); se nenhum couber
+    # no alvo, pega o menor que caiba no limite máximo.
+    within_target = [c for c in candidates if c[1] <= TARGET_UPLOAD_BYTES]
+    pool = within_target or candidates
+    # Entre os que cabem no alvo, escolhe a maior resolução.
+    pool.sort(key=lambda c: (c[0], -c[1]), reverse=True)
+    return pool[0][2]
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,6 +216,7 @@ class VideoDownloader:
             "socket_timeout": 20,
             "retries": 2,
             "merge_output_format": "mp4",
+            "noprogress": True,
             "postprocessors": [
                 {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}
             ],
