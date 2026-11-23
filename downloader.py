@@ -139,24 +139,25 @@ class VideoDownloader:
         )
 
     # ----------------------------------------------------------------- download
-    def download(self, url: str, target_dir: Path) -> DownloadResult:
-        """Baixa o vídeo em target_dir com resolução máxima configurada."""
-        height = self._settings.max_height
-        # prioriza mp4; se não houver, aceita qualquer container e converte
-        max_size = str(MAX_UPLOAD_BYTES)
-        format_selector = (
-            f"bestvideo[height<={height}][filesize<{max_size}][ext=mp4]+bestaudio[ext=m4a]/"
-            f"bestvideo[height<={height}][filesize<{max_size}]+bestaudio/"
-            f"best[height<={height}][filesize<{max_size}][ext=mp4]/"
-            f"best[height<={height}][filesize<{max_size}]/"
-            f"bestvideo[height<={height}]+bestaudio/"
-            f"best[height<={height}]/best"
+    def _format_selector(self) -> str:
+        """Seletor que prefere formatos menores para caber no limite do Telegram."""
+        h = self._settings.max_height
+        return (
+            f"bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]/"
+            f"bestvideo[height<={h}]+bestaudio/"
+            f"best[height<={h}][ext=mp4]/"
+            f"best[height<={h}]/"
+            f"bestvideo+bestaudio/best"
         )
 
-        outtmpl = str(target_dir / "%(id)s.%(ext)s")
+    def _download_with_format(
+        self, url: str, target_dir: Path, fmt: str, tag: str
+    ) -> tuple[Path, dict]:
+        """Baixa com um formato específico e retorna (caminho, info)."""
+        outtmpl = str(target_dir / f"%(id)s_{tag}.%(ext)s")
         ffmpeg = self._settings.ffmpeg_path
         opts: dict = {
-            "format": format_selector,
+            "format": fmt,
             "outtmpl": outtmpl,
             "quiet": True,
             "no_warnings": True,
@@ -165,36 +166,64 @@ class VideoDownloader:
             "retries": 2,
             "merge_output_format": "mp4",
             "postprocessors": [
-                {
-                    "key": "FFmpegVideoConvertor",
-                    "preferedformat": "mp4",
-                }
+                {"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}
             ],
         }
         if ffmpeg:
             opts["ffmpeg_location"] = ffmpeg
 
-        try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                filename = ydl.prepare_filename(info)
-        except Exception as exc:
-            raise DownloadError(
-                "Falhei ao baixar este vídeo. Ele pode estar indisponível ou restrito."
-            ) from exc
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            filename = ydl.prepare_filename(info)
 
         path = Path(filename)
-        # O postprocessor pode trocar a extensão para .mp4
         if not path.exists():
-            candidates = sorted(target_dir.glob(f"{info.get('id', '*')}.*"))
+            candidates = sorted(target_dir.glob(f"{info.get('id', '*')}_{tag}.*"))
+            if not candidates:
+                candidates = sorted(target_dir.glob(f"{info.get('id', '*')}.*"))
             if not candidates:
                 raise DownloadError("O arquivo baixado não foi encontrado.")
             path = candidates[0]
+        return path, info
 
-        # Se ainda passar do limite, re-encode progressivamente até caber.
-        if path.stat().st_size > MAX_UPLOAD_BYTES:
-            path = self._shrink_to_limit(path, target_dir, ffmpeg)
+    def download(self, url: str, target_dir: Path) -> DownloadResult:
+        """Baixa o vídeo, tentando resoluções menores até caber no limite."""
+        info: dict = {}
+        path: Path | None = None
 
+        # Tenta do maior para o menor, parando no primeiro que caiba.
+        attempts = [
+            (self._format_selector(), "best"),
+            ("best[height<=480]/bestvideo[height<=480]+bestaudio", "480"),
+            ("best[height<=360]/bestvideo[height<=360]+bestaudio", "360"),
+            ("worst[height>=240]/worst", "worst"),
+        ]
+        for fmt, tag in attempts:
+            try:
+                path, info = self._download_with_format(url, target_dir, fmt, tag)
+            except DownloadError:
+                raise
+            except Exception as exc:
+                raise DownloadError(
+                    "Falhei ao baixar este vídeo. Ele pode estar indisponível ou restrito."
+                ) from exc
+            if path.stat().st_size <= MAX_UPLOAD_BYTES:
+                return DownloadResult(
+                    path=path, title=str(info.get("title") or "vídeo")
+                )
+            # Arquivo grande: remove e tenta a próxima resolução.
+            path.unlink(missing_ok=True)
+
+        # Nenhuma resolução nativa coube; última tentativa: re-encode via FFmpeg.
+        # Rebaixa o primeiro arquivo (melhor qualidade) para compressão.
+        try:
+            path, info = self._download_with_format(
+                url, target_dir, self._format_selector(), "reencode"
+            )
+        except Exception as exc:
+            raise DownloadError("Falhei ao preparar o vídeo para compressão.") from exc
+
+        path = self._shrink_to_limit(path, target_dir, self._settings.ffmpeg_path)
         return DownloadResult(path=path, title=str(info.get("title") or "vídeo"))
 
     # --------------------------------------------------------------- compressão
@@ -222,8 +251,15 @@ class VideoDownloader:
                 str(out),
             ]
             try:
-                subprocess.run(cmd, check=True, capture_output=True, timeout=900)
-            except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+                result = subprocess.run(
+                    cmd, check=True, capture_output=True, text=True, timeout=900
+                )
+            except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired) as exc:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "FFmpeg falhou no bitrate %s: %s", bitrate, exc
+                )
                 break
             if out.exists() and out.stat().st_size <= MAX_UPLOAD_BYTES:
                 path.unlink(missing_ok=True)
