@@ -85,6 +85,47 @@ class VideoInfo:
     duration: int
     id: str
     webpage_url: str
+    format_id: str | None = None
+
+
+def _estimate_bytes(fmt: dict, duration: int) -> int:
+    """Estima o tamanho de um formato usando filesize ou bitrate (tbr)."""
+    filesize = fmt.get("filesize") or fmt.get("filesize_approx")
+    if filesize:
+        return int(filesize)
+    tbr = fmt.get("tbr") or fmt.get("vbr") or 0
+    if tbr and duration:
+        # tbr está em kbps; bytes = kbps * 1000 / 8 * segundos
+        return int(float(tbr) * 1000 / 8 * duration)
+    return 0
+
+
+def _pick_best_format(info: dict, duration: int, max_height: int) -> str | None:
+    """Escolhe o formato que cabe no limite do Telegram com a melhor qualidade.
+
+    Usa apenas metadados (já obtidos no extract_info), sem baixar nada.
+    """
+    formats = info.get("formats") or []
+    candidates = []
+    for f in formats:
+        if f.get("vcodec") == "none":
+            continue  # ignora formatos só de áudio
+        height = f.get("height") or 0
+        if height and height > max_height:
+            continue
+        est = _estimate_bytes(f, duration)
+        # Sem estimativa de tamanho, não dá para garantir que cabe: deprioriza.
+        if est == 0:
+            continue
+        if est > MAX_UPLOAD_BYTES:
+            continue
+        # Prefere maior resolução entre os que cabem.
+        candidates.append((height or 0, est, str(f.get("format_id"))))
+
+    if not candidates:
+        return None
+    candidates.sort(reverse=True)
+    return candidates[0][2]
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,11 +172,14 @@ class VideoDownloader:
                 "Escolha um vídeo mais curto, por favor."
             )
 
+        format_id = _pick_best_format(info, duration, self._settings.max_height)
+
         return VideoInfo(
             title=str(info.get("title") or "vídeo"),
             duration=duration,
             id=str(info.get("id") or ""),
             webpage_url=str(info.get("webpage_url") or url),
+            format_id=format_id,
         )
 
     # ----------------------------------------------------------------- download
@@ -186,13 +230,25 @@ class VideoDownloader:
             path = candidates[0]
         return path, info
 
-    def download(self, url: str, target_dir: Path) -> DownloadResult:
-        """Baixa o vídeo, tentando resoluções menores até caber no limite."""
+    def download(
+        self, url: str, target_dir: Path, preferred_format: str | None = None
+    ) -> DownloadResult:
+        """Baixa o vídeo em uma única passada quando possível.
+
+        Se preferred_format foi calculado nos metadados, ele é usado direto
+        (rápido). Fallbacks só entram se o arquivo ainda passar do limite.
+        """
         info: dict = {}
         path: Path | None = None
 
-        # Tenta do maior para o menor, parando no primeiro que caiba.
-        attempts = [
+        # Formato escolhido nos metadados = prioridade (uma única passada).
+        if preferred_format:
+            attempts = [(preferred_format, "pick")]
+        else:
+            attempts = []
+
+        # Fallbacks: do maior para o menor, parando no primeiro que caiba.
+        attempts += [
             (self._format_selector(), "best"),
             ("best[height<=480]/bestvideo[height<=480]+bestaudio", "480"),
             ("best[height<=360]/bestvideo[height<=360]+bestaudio", "360"),

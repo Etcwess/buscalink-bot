@@ -205,7 +205,7 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     with tempfile.TemporaryDirectory(prefix="telegram_bot_") as tmp:
         try:
             result = await asyncio.to_thread(
-                downloader.download, url, Path(tmp)
+                downloader.download, url, Path(tmp), info.format_id
             )
         except (DownloadError, VideoTooLargeError) as exc:
             await _safe_reply(update, str(exc), status_msg)
