@@ -76,7 +76,7 @@ O bot usa **long polling**, então não precisa de webhook, IP fixo nem domínio
 
 1. Crie um repositório no GitHub e envie estes arquivos (o `.env` **não** vai, ele está no `.gitignore`).
 2. No [Render Dashboard](https://dashboard.render.com): **New → Blueprint** → conecte o repo.
-3. Ele lê o `render.yaml` e cria um **Background Worker**.
+3. Ele lê o `render.yaml` e cria um **Web Service** + banco Postgres. (Web Services são suportados no plano Free; Workers não. O bot sobe um health server na porta `PORT` para manter o processo ativo.)
 4. Em `Environment`, preencha `BOT_TOKEN` com o token do @BotFather.
 5. O `build.sh` instala as dependências e um FFmpeg estático automaticamente.
 6. Pronto: o worker fica online 24/7 (plano free pode hibernar após inatividade; use um plano pago para evitar isso).
