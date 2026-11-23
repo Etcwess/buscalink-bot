@@ -249,46 +249,25 @@ class VideoDownloader:
         info: dict = {}
         path: Path | None = None
 
-        # Formato escolhido nos metadados = prioridade (uma única passada).
-        if preferred_format:
-            attempts = [(preferred_format, "pick")]
-        else:
-            attempts = []
-
-        # Fallbacks: do maior para o menor, parando no primeiro que caiba.
-        attempts += [
-            (self._format_selector(), "best"),
-            ("best[height<=480]/bestvideo[height<=480]+bestaudio", "480"),
-            ("best[height<=360]/bestvideo[height<=360]+bestaudio", "360"),
-            ("worst[height>=240]/worst", "worst"),
-        ]
-        for fmt, tag in attempts:
-            try:
-                path, info = self._download_with_format(url, target_dir, fmt, tag)
-            except DownloadError:
-                raise
-            except Exception as exc:
-                raise DownloadError(
-                    "Falhei ao baixar este vídeo. Ele pode estar indisponível ou restrito."
-                ) from exc
-            if path.stat().st_size <= MAX_UPLOAD_BYTES:
-                return DownloadResult(
-                    path=path, title=str(info.get("title") or "vídeo")
-                )
-            # Arquivo grande: remove e tenta a próxima resolução.
-            path.unlink(missing_ok=True)
-
-        # Nenhuma resolução nativa coube; última tentativa: re-encode via FFmpeg.
-        # Rebaixa o primeiro arquivo (melhor qualidade) para compressão.
+        # Uma única passada: usa o formato escolhido nos metadados.
+        fmt = preferred_format or self._format_selector()
         try:
-            path, info = self._download_with_format(
-                url, target_dir, self._format_selector(), "reencode"
-            )
+            path, info = self._download_with_format(url, target_dir, fmt, "pick")
+        except DownloadError:
+            raise
         except Exception as exc:
-            raise DownloadError("Falhei ao preparar o vídeo para compressão.") from exc
+            raise DownloadError(
+                "Falhei ao baixar este vídeo. Ele pode estar indisponível ou restrito."
+            ) from exc
 
-        path = self._shrink_to_limit(path, target_dir, self._settings.ffmpeg_path)
-        return DownloadResult(path=path, title=str(info.get("title") or "vídeo"))
+        title = str(info.get("title") or "vídeo")
+
+        # Se couber, pronto. Se não couber, comprime ESTE MESMO arquivo
+        # (nunca re-baixa): evita minutos perdidos em tentativas repetidas.
+        if path.stat().st_size > MAX_UPLOAD_BYTES:
+            path = self._shrink_to_limit(path, target_dir, self._settings.ffmpeg_path)
+
+        return DownloadResult(path=path, title=title)
 
     # --------------------------------------------------------------- compressão
     def _shrink_to_limit(
@@ -296,21 +275,23 @@ class VideoDownloader:
     ) -> Path:
         """Re-encode com FFmpeg em bitrates decrescentes até caber no limite."""
         ffmpeg_bin = ffmpeg or "ffmpeg"
-        for bitrate in ("2500k", "1800k", "1200k", "800k", "500k"):
+        # Bitrates baixos + 480p: vídeos longos em servidores free precisam
+        # caber em ~45 MB. 500k × 1000s / 8 ≈ 60 MB, então começamos em 350k.
+        for bitrate in ("600k", "450k", "350k", "250k", "180k"):
             out = target_dir / f"{path.stem}_{bitrate}.mp4"
             cmd = [
                 ffmpeg_bin,
                 "-y",
                 "-loglevel", "error",
                 "-i", str(path),
-                "-vf", f"scale='min({self._settings.max_height},iw)':-2",
+                "-vf", "scale='min(480,iw)':-2",
                 "-c:v", "libx264",
-                "-preset", "veryfast",
+                "-preset", "ultrafast",
                 "-b:v", bitrate,
                 "-maxrate", bitrate,
                 "-bufsize", f"{int(bitrate[:-1]) * 2}k",
                 "-c:a", "aac",
-                "-b:a", "96k",
+                "-b:a", "64k",
                 "-movflags", "+faststart",
                 str(out),
             ]

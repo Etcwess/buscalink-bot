@@ -303,7 +303,24 @@ def main() -> None:
         asyncio.set_event_loop(asyncio.new_event_loop())
 
     logger.info("Bot iniciado. DB=%s Pix=%s", settings.db_path, pix.name)
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+    # Em deploys, a instância antiga pode levar alguns segundos para morrer.
+    # Se o Telegram responder 409 (conflito de getUpdates), esperamos e tentamos
+    # de novo em vez de travar o serviço.
+    from telegram.error import Conflict, NetworkError
+
+    while True:
+        try:
+            application.run_polling(allowed_updates=Update.ALL_TYPES)
+            break
+        except Conflict:
+            logger.warning(
+                "Outra instância ainda está ativa (409). Tentando novamente em 30s..."
+            )
+            time.sleep(30)
+        except NetworkError as exc:
+            logger.warning("Erro de rede no polling (%s). Tentando em 10s...", exc)
+            time.sleep(10)
 
 
 if __name__ == "__main__":
