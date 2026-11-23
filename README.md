@@ -81,7 +81,7 @@ O bot usa **long polling**, então não precisa de webhook, IP fixo nem domínio
 5. O `build.sh` instala as dependências e um FFmpeg estático automaticamente.
 6. Pronto: o worker fica online 24/7 (plano free pode hibernar após inatividade; use um plano pago para evitar isso).
 
-> Atenção: o plano free do Render usa disco efêmero. O `bot.db` é recriado se o worker reiniciar, e saldos/tokens voltam ao zero. Para persistência real, troque o SQLite por Postgres (posso adaptar a camada `db.py` se quiser).
+> O `render.yaml` já provisiona um **Postgres gerenciado** e injeta `DATABASE_URL` no worker. Com isso, saldos, tokens e pagamentos persistem mesmo se o worker reiniciar. Localmente, sem `DATABASE_URL`, o bot continua usando SQLite (`DB_PATH`).
 
 ### Opção B — Docker (Railway / Fly.io / VPS)
 
