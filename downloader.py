@@ -54,12 +54,9 @@ def normalize_url(text: str) -> str | None:
     if match:
         candidate = match.group(0)
     else:
-        # Procura um domínio conhecido mesmo sem scheme
+        # Qualquer domínio com ponto e caminho, mesmo sem scheme.
         match = re.search(
-            r"(?:www\.)?(?:youtube\.com|youtu\.be|youtube-nocookie\.com|"
-            r"tiktok\.com|vm\.tiktok\.com|instagram\.com|twitter\.com|"
-            r"x\.com|facebook\.com|fb\.watch|vimeo\.com|twitch\.tv|"
-            r"reddit\.com|redd\.it|mediafire\.com|drive\.google\.com)/[^\s<>\"']*",
+            r"(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:/[^\s<>\"']*)?",
             text,
             re.IGNORECASE,
         )
