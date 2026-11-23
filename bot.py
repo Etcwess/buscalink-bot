@@ -250,6 +250,15 @@ def main() -> None:
         start_health_server(port=int(port))
         logger.info("Health server na porta %s", port)
 
+    # Python 3.14 removeu o event loop implícito; criamos um explicitamente
+    # para manter compatibilidade com python-telegram-bot 21.x.
+    import asyncio
+
+    try:
+        asyncio.get_event_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
     logger.info("Bot iniciado. DB=%s Pix=%s", settings.db_path, pix.name)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
