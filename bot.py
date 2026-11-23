@@ -50,10 +50,16 @@ pix = get_pix_provider(settings)
 
 
 # ---------------------------------------------------------------------- helpers
-async def _safe_reply(update: Update, text: str) -> None:
-    """Envia mensagem de texto com Markdown, caindo para texto puro se necessário."""
+async def _safe_reply(update: Update, text: str, status_msg=None) -> None:
+    """Envia mensagem de texto; se houver status_msg, edita-a em vez de criar outra."""
     if update.effective_message is None:
         return
+    if status_msg is not None:
+        try:
+            await status_msg.edit_text(text, parse_mode=ParseMode.MARKDOWN)
+            return
+        except Exception:
+            pass
     try:
         await update.effective_message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
     except Exception:
@@ -169,18 +175,30 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     db.touch_request(user_id)
+    logger.info("Processando link de %s: %s", user_id, url)
+
+    # Feedback imediato: o download pode demorar, então avisamos que recebemos.
+    status_msg = None
+    if update.effective_message is not None:
+        status_msg = await update.effective_message.reply_text(
+            "⏳ Recebi o link! Consultando o vídeo..."
+        )
 
     # 1) metadados primeiro — bloqueio sem gasto de token
     try:
         info = await asyncio.to_thread(downloader.extract_info, url)
     except VideoTooLongError as exc:
-        await _safe_reply(update, str(exc))
+        await _safe_reply(update, str(exc), status_msg)
         return
     except DownloadError as exc:
-        await _safe_reply(update, str(exc))
+        await _safe_reply(update, str(exc), status_msg)
         return
 
+    logger.info("Metadados OK: %ss, iniciando download", info.duration)
+
     # 2) download em diretório temporário com limpeza automática
+    if status_msg is not None:
+        await status_msg.edit_text("⬇️ Baixando o vídeo (isso pode levar alguns minutos)...")
     if update.effective_message is not None:
         await update.effective_chat.send_action(ChatAction.UPLOAD_VIDEO)
 
@@ -190,7 +208,7 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 downloader.download, url, Path(tmp)
             )
         except (DownloadError, VideoTooLargeError) as exc:
-            await _safe_reply(update, str(exc))
+            await _safe_reply(update, str(exc), status_msg)
             return
 
         # 3) envia e só então debita o token
@@ -208,14 +226,15 @@ async def handle_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 update,
                 "O download funcionou, mas falhei ao enviar. Nenhum token foi cobrado. "
                 "Tente novamente em instantes.",
+                status_msg,
             )
             return
 
         if db.consume_token(user_id):
             saldo = db.get_tokens(user_id)
-            await _safe_reply(update, f"✅ Pronto! Token cobrado. Saldo: *{saldo}*.")
+            await _safe_reply(update, f"✅ Pronto! Token cobrado. Saldo: *{saldo}*.", status_msg)
         else:
-            await _safe_reply(update, "✅ Pronto!")
+            await _safe_reply(update, "✅ Pronto!", status_msg)
 
     logger.info("Vídeo entregue: %s para user %s (%ss)", info.id, user_id, info.duration)
 
